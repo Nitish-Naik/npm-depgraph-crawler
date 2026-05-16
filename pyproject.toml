@@ -1,0 +1,19 @@
+[project]
+name = "npm-depgraph-crawler"
+version = "0.1.0"
+description = "Resumable crawler over the npm registry dependency graph."
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+depcrawler = "crawler.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["crawler"]
