@@ -1,7 +1,15 @@
 import argparse
 import sys
 
-from . import db, fetch, store
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional runtime convenience
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
+from . import db, fetch, loop, seed, store
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -10,6 +18,21 @@ def main(argv: list[str] | None = None) -> int:
 
     p_one = sub.add_parser("fetch-one", help="Fetch and store a single npm package")
     p_one.add_argument("name", help="npm package name (e.g. lodash, @types/node)")
+
+    p_seed = sub.add_parser("seed", help="Seed the crawl frontier")
+    p_seed.add_argument(
+        "--from-file",
+        dest="from_file",
+        help="Read package names from a newline-separated file",
+    )
+
+    p_crawl = sub.add_parser("crawl", help="Run the resumable crawl loop")
+    p_crawl.add_argument(
+        "--max-packages",
+        type=int,
+        default=None,
+        help="Stop after this many successful stores",
+    )
 
     args = parser.parse_args(argv)
 
@@ -21,6 +44,23 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"stored {args.name}: {n_versions} versions, "
             f"{len(discovered)} unique dependency names discovered"
+        )
+        return 0
+
+    if args.cmd == "seed":
+        with db.connect() as conn:
+            if args.from_file:
+                inserted = seed.seed_from_file(conn, args.from_file)
+            else:
+                inserted = seed.seed_default(conn)
+        print(f"seeded {inserted} packages")
+        return 0
+
+    if args.cmd == "crawl":
+        summary = loop.run(max_packages=args.max_packages)
+        print(
+            f"crawl done: stored={summary['stored']} "
+            f"failed={summary['failed']} elapsed={summary['elapsed']}s"
         )
         return 0
 

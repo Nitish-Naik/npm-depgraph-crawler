@@ -42,9 +42,12 @@ def _normalize_repository(value: Any) -> str | None:
 def _normalize_homepage(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
+def store_package_data(conn: psycopg.Connection, doc: dict) -> set[str]:
+    """Persist one registry document's package/version/dep rows.
 
-def store_package(conn: psycopg.Connection, doc: dict) -> set[str]:
-    """Persist one registry document and return newly discovered dependency names."""
+    Does NOT touch crawl_frontier — the caller owns that transition. Returns
+    the set of dependency names discovered in this document.
+    """
     name = doc.get("name")
     if not isinstance(name, str):
         raise ValueError("registry document is missing a string 'name' field")
@@ -139,6 +142,17 @@ def store_package(conn: psycopg.Connection, doc: dict) -> set[str]:
                     )
                     discovered.add(dep_name)
 
+    return discovered
+
+
+def store_package(conn: psycopg.Connection, doc: dict) -> set[str]:
+    """Legacy wrapper used by `fetch-one`: write package data AND advance the
+    frontier in one go. Preserves the M1 behavior so the existing CLI command
+    keeps working unchanged.
+    """
+    discovered = store_package_data(conn, doc)
+    name = doc["name"]
+    with conn.transaction(), conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO crawl_frontier (name, state, last_attempted_at, attempts)
@@ -151,11 +165,9 @@ def store_package(conn: psycopg.Connection, doc: dict) -> set[str]:
             """,
             (name,),
         )
-
         for dep_name in discovered:
             cur.execute(
                 "INSERT INTO crawl_frontier (name) VALUES (%s) ON CONFLICT DO NOTHING",
                 (dep_name,),
             )
-
     return discovered

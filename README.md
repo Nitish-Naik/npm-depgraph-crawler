@@ -26,7 +26,7 @@ The schema lives in [`sql/schema.sql`](sql/schema.sql).
 ## Project status
 
 - [ ] Milestone 1 — Schema + single fetch (Python)
-- [ ] Milestone 2 — Resumable crawl loop (Python)
+- [x] Milestone 2 — Resumable crawl loop (Python)
 - [ ] Milestone 3 — Politeness + throughput (Python)
 - [ ] Milestone 4 — Port the hot path to Rust
 - [ ] Milestone 5 — Full-registry crawl
