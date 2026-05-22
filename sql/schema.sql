@@ -76,3 +76,24 @@ CREATE INDEX IF NOT EXISTS crawl_frontier_pending
     WHERE state = 'pending';
 
 COMMIT;
+
+
+-- ---------------------------------------------------------------------------
+-- M2 migration: lease-based crash recovery for crawl_frontier.
+-- Adds claim_expires_at and revises the partial index so the claim query
+-- can find both pending rows and in_progress rows whose lease has expired.
+-- ---------------------------------------------------------------------------
+
+
+BEGIN;
+    ALTER TABLE crawl_frontier
+        ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
+
+
+DROP INDEX IF EXISTS crawl_frontier_pending;
+CREATE INDEX IF NOT EXISTS crawl_frontier_claimable
+    ON crawl_frontier (discovered_at)
+    WHERE state = 'pending'
+     OR (state = 'pending' AND claim_expires_at IS NOT NULL);
+
+COMMIT;
