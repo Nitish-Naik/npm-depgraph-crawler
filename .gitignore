@@ -1,0 +1,13 @@
+/docs
+/myvenv
+/npm_depgraph_crawler.egg-info
+
+/tests/__pycache__/
+
+/__pycache__
+
+.env
+
+/.pytest_cache
+
+/crawler/__pycache__
