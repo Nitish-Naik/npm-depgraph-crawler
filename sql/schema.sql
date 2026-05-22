@@ -94,6 +94,6 @@ DROP INDEX IF EXISTS crawl_frontier_pending;
 CREATE INDEX IF NOT EXISTS crawl_frontier_claimable
     ON crawl_frontier (discovered_at)
     WHERE state = 'pending'
-     OR (state = 'pending' AND claim_expires_at IS NOT NULL);
+     OR (state = 'in_progress' AND claim_expires_at IS NOT NULL);
 
 COMMIT;

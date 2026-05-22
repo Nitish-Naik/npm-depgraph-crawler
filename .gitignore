@@ -11,3 +11,5 @@
 /.pytest_cache
 
 /crawler/__pycache__
+
+/.vscode
