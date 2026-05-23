@@ -25,9 +25,9 @@ The schema lives in [`sql/schema.sql`](sql/schema.sql).
 
 ## Project status
 
-- [ ] Milestone 1 — Schema + single fetch (Python)
+- [x] Milestone 1 — Schema + single fetch (Python)
 - [x] Milestone 2 — Resumable crawl loop (Python)
-- [ ] Milestone 3 — Politeness + throughput (Python)
+- [x] Milestone 3 — Politeness + throughput (Python)
 - [ ] Milestone 4 — Port the hot path to Rust
 - [ ] Milestone 5 — Full-registry crawl
 - [ ] Milestone 6 — Deep analysis
@@ -40,3 +40,15 @@ Python, Rust (PyO3 / maturin), PostgreSQL. Built and run on Linux.
 ## Notes
 
 This README grows as the project does — by the final milestone it becomes the write-up: the architecture decisions, what broke at scale, the Python-vs-Rust benchmark, and the answer to the dependency-depth question.
+
+## Milestone 3 notes
+
+The Python crawler now reuses one `httpx.Client` for the crawl instead of opening a fresh client per package, which keeps connection pooling alive across registry requests. The crawl command also has a small client-side rate limiter (`--requests-per-second`, default `2.0`) and honors `Retry-After` on retriable HTTP responses, capped by `--retry-after-max-seconds`.
+
+## Operating notes
+
+Use [`docs/runbook.md`](docs/runbook.md) for the small-crawl workflow: seed, crawl with bounds, inspect status, stop, and resume. The crawler now has a `status` command for queue counts, stored row counts, and failure reasons.
+
+Milestone 4 starts with profiling, not Rust code. Use [`docs/profiling.md`](docs/profiling.md) to record the Python baseline before deciding what to port.
+
+Starter SQL analysis queries live in [`analysis/`](analysis/). They are intentionally plain SQL so the results can be copied into the final write-up once a meaningful crawl has run.

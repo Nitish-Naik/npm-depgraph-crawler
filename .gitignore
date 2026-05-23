@@ -1,5 +1,6 @@
-/docs
 /myvenv
+/docs/superpowers
+/docs
 /npm_depgraph_crawler.egg-info
 
 /tests/__pycache__/

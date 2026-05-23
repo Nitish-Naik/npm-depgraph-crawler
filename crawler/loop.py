@@ -5,9 +5,12 @@ import httpx
 from crawler import db
 from crawler.store import store_package_data
 from crawler.errors import classify
+from crawler.rate import RateLimiter, parse_retry_after
 
 
 MAX_ATTEMPTS = 3
+DEFAULT_REQUESTS_PER_SECOND = 2.0
+DEFAULT_RETRY_AFTER_MAX_SECONDS = 300.0
 
 
 def _error_reason(error: BaseException) -> str:
@@ -109,16 +112,35 @@ def finalize_failure(conn, name, error, attempts) -> None:
     return None
 
 
+def _retry_after_delay(error: BaseException, max_seconds: float) -> float | None:
+    if not isinstance(error, httpx.HTTPStatusError):
+        return None
 
-def run(max_packages=None) -> dict:
+    delay = parse_retry_after(error.response.headers.get("Retry-After"))
+    if delay is None:
+        return None
+
+    return min(delay, max_seconds)
+
+
+def run(
+    max_packages=None,
+    *,
+    max_seconds: int | None = None,
+    requests_per_second: float = DEFAULT_REQUESTS_PER_SECOND,
+    retry_after_max_seconds: float = DEFAULT_RETRY_AFTER_MAX_SECONDS,
+) -> dict:
     from datetime import datetime
     from crawler.fetch import fetch_package
+    from crawler.fetch import new_client
     import time
 
     stored_count = 0
     failed_count = 0
     start_time = time.time()
     last_tick = start_time
+    limiter = RateLimiter(requests_per_second)
+    stop_reason = "queue_empty"
 
     def get_state_counts():
         """Query frontier for current state counts."""
@@ -138,52 +160,75 @@ def run(max_packages=None) -> dict:
         kv = " ".join(f"{k}={v}" for k, v in kwargs.items())
         print(f"[{ts}] {event:<8} {name_pad} {kv}", flush=True)
 
-    while True:
-        # Check heartbeat
-        now = time.time()
-        if now - last_tick >= 30:
-            counts = get_state_counts()
-            print_line("tick", "", queue=counts.get("pending", 0),
-                      in_progress=counts.get("in_progress", 0),
-                      done=counts.get("done", 0), failed=counts.get("failed", 0))
-            last_tick = now
-        
-        # Claim
-        with db.connect() as conn:
-            result = claim(conn)
-        if result is None:
-            # Queue drained
-            break
-        
-        name, attempts = result
-        print_line("claim", name, attempts=f"{attempts}/{MAX_ATTEMPTS}", queue=queue_size())
-        
-        # Fetch and route
-        try:
-            print_line("fetching", name, attempts=f"{attempts}/{MAX_ATTEMPTS}")
-            doc = fetch_package(name)
+    with new_client() as client:
+        while True:
+            # Check heartbeat
+            now = time.time()
+            if max_seconds is not None and now - start_time >= max_seconds:
+                stop_reason = "max_seconds"
+                break
+
+            if now - last_tick >= 30:
+                counts = get_state_counts()
+                print_line("tick", "", queue=counts.get("pending", 0),
+                          in_progress=counts.get("in_progress", 0),
+                          done=counts.get("done", 0), failed=counts.get("failed", 0))
+                last_tick = now
+            
+            # Claim
             with db.connect() as conn:
-                discovered = finalize_success(conn, name, doc)
-            stored_count += 1
-            print_line(
-                "done",
-                name,
-                versions=len(doc.get("versions") or {}),
-                deps_discovered=len(discovered),
-                queue=queue_size(),
-            )
-        except Exception as e:
-            with db.connect() as conn:
-                finalize_failure(conn, name, e, attempts)
-            failed_count += 1
-            event = "retry" if classify(e) == "retriable" and attempts < MAX_ATTEMPTS else "failed"
-            print_line(event, name, attempts=f"{attempts}/{MAX_ATTEMPTS}", reason=_error_reason(e), queue=queue_size())
-        
-        # Check max limit
-        if max_packages and stored_count >= max_packages:
-            break
+                result = claim(conn)
+            if result is None:
+                # Queue drained
+                break
+            
+            name, attempts = result
+            print_line("claim", name, attempts=f"{attempts}/{MAX_ATTEMPTS}", queue=queue_size())
+            
+            # Fetch and route
+            try:
+                slept = limiter.wait()
+                print_line(
+                    "fetching",
+                    name,
+                    attempts=f"{attempts}/{MAX_ATTEMPTS}",
+                    throttle=f"{slept:.2f}s",
+                )
+                doc = fetch_package(name, client=client)
+                with db.connect() as conn:
+                    discovered = finalize_success(conn, name, doc)
+                stored_count += 1
+                print_line(
+                    "done",
+                    name,
+                    versions=len(doc.get("versions") or {}),
+                    deps_discovered=len(discovered),
+                    queue=queue_size(),
+                )
+            except Exception as e:
+                retry_after = _retry_after_delay(e, retry_after_max_seconds)
+                if retry_after is not None:
+                    limiter.pause(retry_after)
+
+                with db.connect() as conn:
+                    finalize_failure(conn, name, e, attempts)
+                failed_count += 1
+                event = "retry" if classify(e) == "retriable" and attempts < MAX_ATTEMPTS else "failed"
+                details = {
+                    "attempts": f"{attempts}/{MAX_ATTEMPTS}",
+                    "reason": _error_reason(e),
+                    "queue": queue_size(),
+                }
+                if retry_after is not None:
+                    details["retry_after"] = f"{retry_after:.2f}s"
+                print_line(event, name, **details)
+            
+            # Check max limit
+            if max_packages and stored_count >= max_packages:
+                stop_reason = "max_packages"
+                break
     
     elapsed = int(time.time() - start_time)
-    print_line("crawl done", "", stored=stored_count, failed=failed_count, elapsed=elapsed)
+    print_line("crawl done", "", stored=stored_count, failed=failed_count, elapsed=elapsed, reason=stop_reason)
     
-    return {"stored": stored_count, "failed": failed_count, "elapsed": elapsed}
+    return {"stored": stored_count, "failed": failed_count, "elapsed": elapsed, "reason": stop_reason}

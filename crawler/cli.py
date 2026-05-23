@@ -9,7 +9,7 @@ except ImportError:  # pragma: no cover - optional runtime convenience
 if load_dotenv is not None:
     load_dotenv()
 
-from . import db, fetch, loop, seed, store
+from . import db, fetch, loop, seed, status, store
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,6 +33,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Stop after this many successful stores",
     )
+    p_crawl.add_argument(
+        "--max-seconds",
+        type=int,
+        default=None,
+        help="Stop after roughly this many seconds",
+    )
+    p_crawl.add_argument(
+        "--requests-per-second",
+        type=float,
+        default=loop.DEFAULT_REQUESTS_PER_SECOND,
+        help="Client-side npm registry request rate; use 0 to disable throttling",
+    )
+    p_crawl.add_argument(
+        "--retry-after-max-seconds",
+        type=float,
+        default=loop.DEFAULT_RETRY_AFTER_MAX_SECONDS,
+        help="Maximum seconds to sleep when honoring a Retry-After header",
+    )
+
+    sub.add_parser("status", help="Show crawl progress and recent failure reasons")
 
     args = parser.parse_args(argv)
 
@@ -57,11 +77,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "crawl":
-        summary = loop.run(max_packages=args.max_packages)
+        summary = loop.run(
+            max_packages=args.max_packages,
+            max_seconds=args.max_seconds,
+            requests_per_second=args.requests_per_second,
+            retry_after_max_seconds=args.retry_after_max_seconds,
+        )
         print(
             f"crawl done: stored={summary['stored']} "
-            f"failed={summary['failed']} elapsed={summary['elapsed']}s"
+            f"failed={summary['failed']} elapsed={summary['elapsed']}s "
+            f"reason={summary['reason']}"
         )
+        return 0
+
+    if args.cmd == "status":
+        with db.connect() as conn:
+            snapshot = status.get_status(conn)
+        print(status.format_status(snapshot))
         return 0
 
     return 1
